@@ -111,14 +111,14 @@ func server(neighboursFilePath string, isStartingPoint bool) {
 
 func main() {
 	//localadress := "127.0.0.1"
-	go server("node-2.yaml", false)
-	go server("node-3.yaml", false)
-	go server("node-4.yaml", false)
-	go server("node-5.yaml", false)
-	go server("node-6.yaml", false)
-	go server("node-7.yaml", false)
-	go server("node-8.yaml", false)
+	go server("./nodes/node-2.yaml", false)
+	go server("./nodes/node-3.yaml", false)
+	go server("./nodes/node-4.yaml", false)
+	go server("./nodes/node-5.yaml", false)
+	go server("./nodes/node-6.yaml", false)
+	go server("./nodes/node-7.yaml", false)
+	go server("./nodes/node-8.yaml", false)
 	time.Sleep(2 * time.Second) //Waiting all node to be ready
-	server("node-1.yaml", true)
+	server("./nodes/node-1.yaml", true)
 	time.Sleep(2 * time.Second) //Waiting all console return from nodes
 }
