@@ -1,9 +1,3 @@
-/*
-	Project : Broadcast by waves demo for SDI course
-	Author : Guillaume Riondet
-	Date : July 2021
-*/
-
 package main
 
 import (
@@ -13,7 +7,7 @@ import (
 	"log"
 	"net"
 	"path/filepath"
-	"strconv"
+	"sort"
 	"time"
 
 	"gopkg.in/yaml.v2"
@@ -21,14 +15,42 @@ import (
 
 var PORT string = ":30000"
 
-type yamlConfig struct {
-	ID         int    `yaml:"id"`
+type Neigh struct {
+	ID         byte   `yaml:"id"`
 	Address    string `yaml:"address"`
-	Neighbours []struct {
-		ID         int    `yaml:"id"`
-		Address    string `yaml:"address"`
-		EdgeWeight int    `yaml:"edge_weight"`
-	} `yaml:"neighbours"`
+	EdgeWeight int    `yaml:"edge_weight"`
+}
+
+type yamlConfig struct {
+	ID         byte    `yaml:"id"`
+	Address    string  `yaml:"address"`
+	Neighbours []Neigh `yaml:"neighbours"`
+}
+
+// Commands definition
+type Command byte
+
+const (
+	Connect     Command = 0
+	NewFragment         = 1
+	Report              = 2
+	Accept              = 3
+	Reject              = 4
+	Merge               = 5
+)
+
+type Packet struct {
+	Cmd  Command
+	Data byte
+}
+
+func getLowestWeightNeighbourId(node yamlConfig) Neigh {
+	var neighbours = node.Neighbours
+	sort.Slice(neighbours, func(i, j int) bool {
+		return neighbours[i].EdgeWeight < neighbours[j].EdgeWeight
+	})
+
+	return neighbours[0]
 }
 
 func initAndParseFileNeighbours(filename string) yamlConfig {
@@ -64,22 +86,75 @@ func send(nodeAddress string, neighAddress string) {
 	outConn.Close()
 }
 
+func sendCommand(neighAddress string, data byte, cmd Command) {
+	outConn, err := net.Dial("tcp", neighAddress+PORT)
+	if err != nil {
+		log.Fatal(err)
+		return
+	}
+
+	//outConn.Write([]byte{byte(cmd)})
+	outConn.Write([]byte{data})
+	outConn.Close()
+}
+
+func waitForCommand(ln net.Listener) Packet {
+	var pck Packet
+	/*conn, _ := ln.Accept()
+	var cmd, _ = bufio.NewReader(conn).ReadByte()
+	//pck.Data, _ = bufio.NewReader(conn).ReadByte()
+	pck.Cmd = Command(cmd)*/
+
+	conn, _ := ln.Accept()
+	msg, _ := bufio.NewReader(conn).ReadByte()
+	conn.Close()
+
+	pck.Cmd = Command(msg)
+	return pck
+}
+
 func sendToAllNeighbours(node yamlConfig) {
 	myLog(node.Address, "Sending message to all neighbours...")
 	for _, neigh := range node.Neighbours {
 		go send(node.Address, neigh.Address)
 	}
 }
+
 func server(neighboursFilePath string, isStartingPoint bool) {
+	// Load node config
 	var node yamlConfig = initAndParseFileNeighbours(neighboursFilePath)
 
+	// Listen for incomming connections
 	myLog(node.Address, "Starting server .... and listening ...")
 	ln, err := net.Listen("tcp", node.Address+PORT)
 	if err != nil {
 		log.Fatal(err)
 		return
 	}
-	var reach bool = false
+
+	// Send connect to neightbours with lowest weight
+	var sendTo []byte
+	var rcvdFrom []byte
+
+	var lowest = getLowestWeightNeighbourId(node)
+	if isStartingPoint {
+		sendCommand(lowest.Address, node.ID, NewFragment)
+		sendTo = append(sendTo, lowest.ID)
+		myLog(node.Address, "Sent")
+	} else {
+		myLog(node.Address, "Reception")
+		var msg = waitForCommand(ln)
+
+		/*conn, _ := ln.Accept()
+		msg, _ := bufio.NewReader(conn).ReadByte()
+		conn.Close()*/
+		//myLog(node.Address, "Message received : "+message)
+
+		rcvdFrom = append(rcvdFrom, byte(msg.Cmd))
+		fmt.Println(rcvdFrom)
+	}
+
+	/*var reach bool = false
 	var count int = 0
 
 	myLog(node.Address, "Neighbours file parsing ...")
@@ -106,18 +181,17 @@ func server(neighboursFilePath string, isStartingPoint bool) {
 		myLog(node.Address, "Message received, count = "+strconv.Itoa(count)+", len neighbours = "+strconv.Itoa(len(node.Neighbours)))
 
 	}
-	myLog(node.Address, "Message received from all neighboors, ending algorithm")
+	myLog(node.Address, "Message received from all neighboors, ending algorithm")*/
 }
 
 func main() {
 	//localadress := "127.0.0.1"
 	go server("./nodes/node-2.yaml", false)
-	go server("./nodes/node-3.yaml", false)
-	go server("./nodes/node-4.yaml", false)
+	/*go server("./nodes/node-4.yaml", false)
 	go server("./nodes/node-5.yaml", false)
 	go server("./nodes/node-6.yaml", false)
 	go server("./nodes/node-7.yaml", false)
-	go server("./nodes/node-8.yaml", false)
+	go server("./nodes/node-8.yaml", false)*/
 	time.Sleep(2 * time.Second) //Waiting all node to be ready
 	server("./nodes/node-1.yaml", true)
 	time.Sleep(2 * time.Second) //Waiting all console return from nodes
