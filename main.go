@@ -15,6 +15,8 @@ import (
 
 var PORT string = ":30000"
 
+var DELIMITER byte = 255
+
 type Neigh struct {
 	ID         byte   `yaml:"id"`
 	Address    string `yaml:"address"`
@@ -44,13 +46,23 @@ type Packet struct {
 	Data byte
 }
 
-func getLowestWeightNeighbourId(node yamlConfig) Neigh {
+func getLowestWeightNeighbour(node yamlConfig) Neigh {
 	var neighbours = node.Neighbours
 	sort.Slice(neighbours, func(i, j int) bool {
 		return neighbours[i].EdgeWeight < neighbours[j].EdgeWeight
 	})
 
 	return neighbours[0]
+}
+
+// omg golang...
+func contains(s []byte, val byte) bool {
+	for _, v := range s {
+		if v == val {
+			return true
+		}
+	}
+	return false
 }
 
 func initAndParseFileNeighbours(filename string) yamlConfig {
@@ -86,30 +98,25 @@ func send(nodeAddress string, neighAddress string) {
 	outConn.Close()
 }
 
-func sendCommand(neighAddress string, data byte, cmd Command) {
+func sendCommand(neighAddress string, cmd Command, data byte) {
 	outConn, err := net.Dial("tcp", neighAddress+PORT)
 	if err != nil {
 		log.Fatal(err)
 		return
 	}
 
-	//outConn.Write([]byte{byte(cmd)})
-	outConn.Write([]byte{data})
+	outConn.Write([]byte{byte(cmd), data, DELIMITER})
 	outConn.Close()
 }
 
 func waitForCommand(ln net.Listener) Packet {
-	var pck Packet
-	/*conn, _ := ln.Accept()
-	var cmd, _ = bufio.NewReader(conn).ReadByte()
-	//pck.Data, _ = bufio.NewReader(conn).ReadByte()
-	pck.Cmd = Command(cmd)*/
-
 	conn, _ := ln.Accept()
-	msg, _ := bufio.NewReader(conn).ReadByte()
+	rcvd, _ := bufio.NewReader(conn).ReadBytes(DELIMITER)
 	conn.Close()
 
-	pck.Cmd = Command(msg)
+	var pck Packet
+	pck.Cmd = Command(rcvd[0])
+	pck.Data = rcvd[1]
 	return pck
 }
 
@@ -133,25 +140,20 @@ func server(neighboursFilePath string, isStartingPoint bool) {
 	}
 
 	// Send connect to neightbours with lowest weight
-	var sendTo []byte
+	var lowest = getLowestWeightNeighbour(node)
+	time.Sleep(2 * time.Second) // Wait some time for all nodes to be ready
+	sendCommand(lowest.Address, Connect, node.ID)
+
+	var msg = waitForCommand(ln)
 	var rcvdFrom []byte
+	rcvdFrom = append(rcvdFrom, byte(msg.Data))
 
-	var lowest = getLowestWeightNeighbourId(node)
-	if isStartingPoint {
-		sendCommand(lowest.Address, node.ID, NewFragment)
-		sendTo = append(sendTo, lowest.ID)
-		myLog(node.Address, "Sent")
-	} else {
-		myLog(node.Address, "Reception")
-		var msg = waitForCommand(ln)
-
-		/*conn, _ := ln.Accept()
-		msg, _ := bufio.NewReader(conn).ReadByte()
-		conn.Close()*/
-		//myLog(node.Address, "Message received : "+message)
-
-		rcvdFrom = append(rcvdFrom, byte(msg.Cmd))
+	// Check if root of fragment tree
+	if contains(rcvdFrom, lowest.ID) && (lowest.ID > node.ID) {
+		myLog(node.Address, "I'm the fragment's root")
 		fmt.Println(rcvdFrom)
+	} else {
+		// Do not root stuff
 	}
 
 	/*var reach bool = false
@@ -186,13 +188,15 @@ func server(neighboursFilePath string, isStartingPoint bool) {
 
 func main() {
 	//localadress := "127.0.0.1"
+	go server("./nodes/node-1.yaml", false)
 	go server("./nodes/node-2.yaml", false)
-	/*go server("./nodes/node-4.yaml", false)
+	go server("./nodes/node-3.yaml", false)
+	go server("./nodes/node-4.yaml", false)
 	go server("./nodes/node-5.yaml", false)
 	go server("./nodes/node-6.yaml", false)
 	go server("./nodes/node-7.yaml", false)
-	go server("./nodes/node-8.yaml", false)*/
+	go server("./nodes/node-8.yaml", false)
 	time.Sleep(2 * time.Second) //Waiting all node to be ready
-	server("./nodes/node-1.yaml", true)
+	//server("./nodes/node-1.yaml", true)
 	time.Sleep(2 * time.Second) //Waiting all console return from nodes
 }
