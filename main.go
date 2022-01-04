@@ -109,14 +109,26 @@ func sendCommand(neighAddress string, cmd Command, data byte) {
 	outConn.Close()
 }
 
-func waitForCommand(ln net.Listener) Packet {
-	conn, _ := ln.Accept()
-	rcvd, _ := bufio.NewReader(conn).ReadBytes(DELIMITER)
-	conn.Close()
+func waitForCommandWithTimeout(ln net.Listener, timeout time.Duration) Packet {
+	ch := make(chan []byte)
+	go func() {
+		conn, _ := ln.Accept()
+		rcvd, _ := bufio.NewReader(conn).ReadBytes(DELIMITER)
+		conn.Close()
+		ch <- rcvd
+	}()
 
 	var pck Packet
-	pck.Cmd = Command(rcvd[0])
-	pck.Data = rcvd[1]
+	select {
+	case rcv := <-ch:
+		// Received command in specified delay
+		pck.Cmd = Command(rcv[0])
+		pck.Data = rcv[1]
+
+	case <-time.After(timeout * time.Millisecond):
+		fmt.Println("Timed out, exiting.")
+	}
+
 	return pck
 }
 
@@ -144,12 +156,18 @@ func server(neighboursFilePath string, isStartingPoint bool) {
 	time.Sleep(2 * time.Second) // Wait some time for all nodes to be ready
 	sendCommand(lowest.Address, Connect, node.ID)
 
-	var msg = waitForCommand(ln)
+	var ind int = 0
 	var rcvdFrom []byte
-	rcvdFrom = append(rcvdFrom, byte(msg.Data))
+	for ind < len(node.Neighbours) {
+		var msg = waitForCommandWithTimeout(ln, 100)
+		rcvdFrom = append(rcvdFrom, byte(msg.Data))
+	}
+
+	//var msg = waitForCommandWithTimeout(ln, 100)
+	//rcvdFrom = append(rcvdFrom, byte(msg.Data))
 
 	// Check if root of fragment tree
-	if contains(rcvdFrom, lowest.ID) && (lowest.ID > node.ID) {
+	if contains(rcvdFrom, lowest.ID) && (lowest.ID < node.ID) {
 		myLog(node.Address, "I'm the fragment's root")
 		fmt.Println(rcvdFrom)
 	} else {
