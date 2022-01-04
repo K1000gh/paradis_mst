@@ -17,6 +17,8 @@ var PORT string = ":30000"
 
 var DELIMITER byte = 255
 
+const NODES_MAX = 20
+
 type Neigh struct {
 	ID         byte   `yaml:"id"`
 	Address    string `yaml:"address"`
@@ -109,27 +111,28 @@ func sendCommand(neighAddress string, cmd Command, data byte) {
 	outConn.Close()
 }
 
-func waitForCommandWithTimeout(ln net.Listener, timeout time.Duration) Packet {
-	ch := make(chan []byte)
+// Can be run with go keyword. Result will be pushed to ch
+func waitForCommandWithTimeout(ln net.Listener, timeout time.Duration, ch chan<- Packet) {
+	chTimeout := make(chan []byte)
 	go func() {
 		conn, _ := ln.Accept()
 		rcvd, _ := bufio.NewReader(conn).ReadBytes(DELIMITER)
-		conn.Close()
-		ch <- rcvd
+		conn.Close() // TODO: Check fi no need to defer to ensure closing
+		chTimeout <- rcvd
 	}()
 
 	var pck Packet
 	select {
-	case rcv := <-ch:
+	case rcv := <-chTimeout:
 		// Received command in specified delay
 		pck.Cmd = Command(rcv[0])
 		pck.Data = rcv[1]
 
 	case <-time.After(timeout * time.Millisecond):
-		fmt.Println("Timed out, exiting.")
+		// fmt.Println("Timed out, exiting.")
 	}
 
-	return pck
+	ch <- pck
 }
 
 func sendToAllNeighbours(node yamlConfig) {
@@ -156,18 +159,23 @@ func server(neighboursFilePath string, isStartingPoint bool) {
 	time.Sleep(2 * time.Second) // Wait some time for all nodes to be ready
 	sendCommand(lowest.Address, Connect, node.ID)
 
-	var ind int = 0
+	// Wait for answer from each node neighbour
 	var rcvdFrom []byte
-	for ind < len(node.Neighbours) {
-		var msg = waitForCommandWithTimeout(ln, 100)
-		rcvdFrom = append(rcvdFrom, byte(msg.Data))
+	var chRcv [NODES_MAX]chan Packet
+	for ind := 0; ind < len(node.Neighbours); ind++ {
+		chRcv[ind] = make(chan Packet)
+		go waitForCommandWithTimeout(ln, 1000, chRcv[ind])
 	}
 
-	//var msg = waitForCommandWithTimeout(ln, 100)
-	//rcvdFrom = append(rcvdFrom, byte(msg.Data))
+	for ind := 0; ind < len(node.Neighbours); ind++ {
+		pck := <-chRcv[ind]
+		if pck.Data > 0 { // 0 means that no connect was sent from this neightbour (timeout)
+			rcvdFrom = append(rcvdFrom, byte(pck.Data))
+		}
+	}
 
 	// Check if root of fragment tree
-	if contains(rcvdFrom, lowest.ID) && (lowest.ID < node.ID) {
+	if contains(rcvdFrom, lowest.ID) && (lowest.ID > node.ID) {
 		myLog(node.Address, "I'm the fragment's root")
 		fmt.Println(rcvdFrom)
 	} else {
