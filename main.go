@@ -41,6 +41,7 @@ const (
 	Accept              = 3
 	Reject              = 4
 	Merge               = 5
+	Ack                 = 6
 )
 
 type Packet struct {
@@ -65,6 +66,15 @@ func contains(s []byte, val byte) bool {
 		}
 	}
 	return false
+}
+
+func all(s []byte, val byte) bool {
+	for _, v := range s {
+		if v != val {
+			return false
+		}
+	}
+	return true
 }
 
 func initAndParseFileNeighbours(filename string) yamlConfig {
@@ -135,10 +145,30 @@ func waitForCommandWithTimeout(ln net.Listener, timeout time.Duration, ch chan<-
 	ch <- pck
 }
 
-func sendToAllNeighbours(node yamlConfig) {
+func waitForCommand(ln net.Listener) Packet {
+	conn, _ := ln.Accept()
+	rcvd, _ := bufio.NewReader(conn).ReadBytes(DELIMITER)
+	conn.Close()
+
+	var pck Packet
+	pck.Cmd = Command(rcvd[0])
+	pck.Data = rcvd[1]
+	return pck
+}
+
+func sendToAllNeighbours(node yamlConfig, cmd Command, data byte) {
 	myLog(node.Address, "Sending message to all neighbours...")
 	for _, neigh := range node.Neighbours {
 		go send(node.Address, neigh.Address)
+	}
+}
+
+func sendToChilds(node yamlConfig, childs []byte, cmd Command, data byte) {
+	// sendCommand(node.Neighbours[0].Address, NewFragment, 3)	// TODO: remove
+	for _, neigh := range node.Neighbours {
+		if contains(childs, neigh.ID) {
+			sendCommand(neigh.Address, cmd, data)
+		}
 	}
 }
 
@@ -147,7 +177,7 @@ func server(neighboursFilePath string, isStartingPoint bool) {
 	var node yamlConfig = initAndParseFileNeighbours(neighboursFilePath)
 
 	// Listen for incomming connections
-	myLog(node.Address, "Starting server .... and listening ...")
+	// myLog(node.Address, "Starting server .... and listening ...")
 	ln, err := net.Listen("tcp", node.Address+PORT)
 	if err != nil {
 		log.Fatal(err)
@@ -160,7 +190,7 @@ func server(neighboursFilePath string, isStartingPoint bool) {
 	sendCommand(lowest.Address, Connect, node.ID)
 
 	// Wait for answer from each node neighbour
-	var rcvdFrom []byte
+	var connectRcvdIds []byte
 	var chRcv [NODES_MAX]chan Packet
 	for ind := 0; ind < len(node.Neighbours); ind++ {
 		chRcv[ind] = make(chan Packet)
@@ -170,46 +200,65 @@ func server(neighboursFilePath string, isStartingPoint bool) {
 	for ind := 0; ind < len(node.Neighbours); ind++ {
 		pck := <-chRcv[ind]
 		if pck.Data > 0 { // 0 means that no connect was sent from this neightbour (timeout)
-			rcvdFrom = append(rcvdFrom, byte(pck.Data))
+			connectRcvdIds = append(connectRcvdIds, byte(pck.Data))
 		}
 	}
 
 	// Check if root of fragment tree
-	if contains(rcvdFrom, lowest.ID) && (lowest.ID > node.ID) {
+	var myFragment byte
+	var myChilds []byte
+	if contains(connectRcvdIds, lowest.ID) && (lowest.ID > node.ID) {
 		myLog(node.Address, "I'm the fragment's root")
-		fmt.Println(rcvdFrom)
+		myFragment = node.ID
+
+		// Send NewFragment with my ID to all childs
+		time.Sleep(2 * time.Second)
+		sendToChilds(node, connectRcvdIds, NewFragment, node.ID)
+		sendToChilds(node, connectRcvdIds, NewFragment, node.ID)
+		sendToChilds(node, connectRcvdIds, NewFragment, node.ID)
+		sendToChilds(node, connectRcvdIds, NewFragment, node.ID) // TODO: check if with one call cant send
+		myLog(node.Address, "Sent NewFragment")
 	} else {
-		// Do not root stuff
-	}
+		// Wait to receive new fragment from parent
+		myLog(node.Address, "Wait for NewFragment")
 
-	/*var reach bool = false
-	var count int = 0
-
-	myLog(node.Address, "Neighbours file parsing ...")
-	myLog(node.Address, "Done")
-
-	myLog(node.Address, "Starting algorithm ...")
-	if isStartingPoint {
-		myLog(node.Address, "This node is the starting point")
-		reach = true
-		go sendToAllNeighbours(node)
-	}
-
-	for count < len(node.Neighbours) {
-		conn, _ := ln.Accept()
-		message, _ := bufio.NewReader(conn).ReadString('\n')
-		conn.Close()
-		myLog(node.Address, "Message received : "+message)
-		count += 1
-		if !reach {
-			myLog(node.Address, "First reception on this node")
-			reach = true
-			go sendToAllNeighbours(node)
+		// Remove root ID from myChilds
+		for ind := 0; ind < len(connectRcvdIds); ind++ {
+			if connectRcvdIds[ind] != lowest.ID {
+				myChilds = append(myChilds, connectRcvdIds[ind])
+			}
 		}
-		myLog(node.Address, "Message received, count = "+strconv.Itoa(count)+", len neighbours = "+strconv.Itoa(len(node.Neighbours)))
+
+		pck := waitForCommand(ln)
+		myLog(node.Address, "Recieved smth")
+
+		if pck.Cmd == NewFragment {
+			myLog(node.Address, "NewFragment recieved")
+			myFragment = pck.Data
+			sendToChilds(node, myChilds, NewFragment, myFragment)
+
+			// Wait for acknowledge from all childs
+			var acks []byte
+			var chRcv [NODES_MAX]chan Packet
+			for ind := 0; ind < len(myChilds); ind++ {
+				chRcv[ind] = make(chan Packet)
+				go waitForCommandWithTimeout(ln, 1000, chRcv[ind])
+			}
+
+			for ind := 0; ind < len(myChilds); ind++ {
+				pck := <-chRcv[ind]
+				if pck.Data > 0 { // 0 means that no connect was sent from this neightbour (timeout)
+					acks = append(acks, byte(pck.Data))
+				}
+			}
+
+			// If each child could ack, ack to parent
+			if len(acks) == len(myChilds) && (all(acks, byte(Ack))) {
+
+			}
+		}
 
 	}
-	myLog(node.Address, "Message received from all neighboors, ending algorithm")*/
 }
 
 func main() {
@@ -222,7 +271,7 @@ func main() {
 	go server("./nodes/node-6.yaml", false)
 	go server("./nodes/node-7.yaml", false)
 	go server("./nodes/node-8.yaml", false)
-	time.Sleep(2 * time.Second) //Waiting all node to be ready
+	time.Sleep(20 * time.Second) //Waiting all node to be ready
 	//server("./nodes/node-1.yaml", true)
 	time.Sleep(2 * time.Second) //Waiting all console return from nodes
 }
