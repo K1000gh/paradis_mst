@@ -188,20 +188,15 @@ func server(neighboursFilePath string) {
 		connectRcvdIds = append(connectRcvdIds, pck.Data)
 	}
 
-	// Remove root ID from myChilds
-	var myChilds []byte
-	for ind := 0; ind < len(connectRcvdIds); ind++ {
-		if connectRcvdIds[ind] != lowestNeight.ID {
-			myChilds = append(myChilds, connectRcvdIds[ind])
-		}
-	}
-
 	// Check if I'm the root of fragment
 	if contains(connectRcvdIds, lowestNeight.ID) && (lowestNeight.ID > node.ID) {
+		myChilds := connectRcvdIds // All Connect received are children for a root
+
+		// Send NewFragment
 		sendToChilds(node, connectRcvdIds, NewFragment, node.ID)
 		myLog(node.Address, "I'm the fragment's root, sent NewFragment")
 
-		// Wait for Ack from all children
+		// Wait for Ack to NewFragment from all children
 		time.Sleep(2000 * time.Millisecond)
 		childAnswerPcks := srv.getAnswerPackets(node)
 		allChildsAck := true
@@ -216,11 +211,23 @@ func server(neighboursFilePath string) {
 		}
 
 		if allChildsAck {
-			myLog(node.Address, "Children Acknowledged to NewFragment")
+			myLog(node.Address, "All children Acknowledged to NewFragment")
 		} else {
-			myLog(node.Address, "Not all children Acknowledged to NewFragment")
+			myLog(node.Address, "ERROR: Not all children Acknowledged to NewFragment")
+			for {
+			} // Loop forever
 		}
+
+		// Send Test to detect lowest links on the border of the fragments
+
 	} else {
+		// Connected received from the root (double arrow) is not its child, to remove
+		var myChilds []byte
+		for ind := 0; ind < len(connectRcvdIds); ind++ {
+			if connectRcvdIds[ind] != lowestNeight.ID {
+				myChilds = append(myChilds, connectRcvdIds[ind])
+			}
+		}
 		myParentId := lowestNeight.ID
 
 		// Wait to receive NewFragment from master
@@ -232,13 +239,14 @@ func server(neighboursFilePath string) {
 			// Send back new fragment to children, otherwise Acknowledge to parent that complete
 			if len(myChilds) == 0 {
 				sendToParent(node, myParentId, Ack, 0)
+				myLog(node.Address, "Send Ack to NewFragment to "+string(myParentId+'0'))
 			} else {
 				sendToChilds(node, myChilds, NewFragment, myFragmentId)
 
 				// Wait for Ack from child
 				childAnswerPcks := pollPacketsReceive(node, srv)
 				if (len(childAnswerPcks) > 0) && (childAnswerPcks[0].Cmd == Ack) {
-					myLog(node.Address, "Send Ack to "+string(myParentId+'0'))
+					myLog(node.Address, "Send Ack to NewFragment to "+string(myParentId+'0'))
 					sendToParent(node, myParentId, Ack, 0)
 				}
 			}
