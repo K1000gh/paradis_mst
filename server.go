@@ -1,4 +1,4 @@
-// Taken from https://stackoverflow.com/questions/66755407/cancelling-a-net-listener-via-context-in-golang
+// Based on https://stackoverflow.com/questions/66755407/cancelling-a-net-listener-via-context-in-golang
 
 package main
 
@@ -8,6 +8,8 @@ import (
 	"net"
 	"sync"
 )
+
+var DELIMITER byte = 255
 
 type Server struct {
 	listener   net.Listener
@@ -97,4 +99,16 @@ func (s *Server) getPacket() Packet {
 	pck.Data = data[1]
 	s.packetsCnt--
 	return pck
+}
+
+// Collect all received packets since last time called from all neighbours
+func (s *Server) getAnswerPackets(node yamlConfig) []Packet {
+	var packets []Packet
+	for ind := 0; ind < len(node.Neighbours); ind++ {
+		if s.isPacketAvalible() {
+			packets = append(packets, s.getPacket())
+		}
+	}
+
+	return packets
 }

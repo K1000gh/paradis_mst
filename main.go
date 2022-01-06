@@ -15,10 +15,6 @@ import (
 
 var PORT string = ":30000"
 
-var DELIMITER byte = 255
-
-const NODES_MAX = 20
-
 type Neigh struct {
 	ID         byte   `yaml:"id"`
 	Address    string `yaml:"address"`
@@ -125,30 +121,6 @@ func sendCommand(neighAddress string, cmd Command, data byte) {
 	outConn.Close()
 }
 
-// Can be run with go keyword. Result will be pushed to ch
-func waitForCommandWithTimeout(ln net.Listener, timeout time.Duration, ch chan<- Packet) {
-	chTimeout := make(chan []byte)
-	go func() {
-		conn, _ := ln.Accept()
-		rcvd, _ := bufio.NewReader(conn).ReadBytes(DELIMITER)
-		conn.Close() // TODO: Check fi no need to defer to ensure closing
-		chTimeout <- rcvd
-	}()
-
-	var pck Packet
-	select {
-	case rcv := <-chTimeout:
-		// Received command in specified delay
-		pck.Cmd = Command(rcv[0])
-		pck.Data = rcv[1]
-
-	case <-time.After(timeout * time.Millisecond):
-		// fmt.Println("Timed out, exiting.")
-	}
-
-	ch <- pck
-}
-
 func waitForCommand(ln net.Listener) Packet {
 	conn, _ := ln.Accept()
 	rcvd, _ := bufio.NewReader(conn).ReadBytes(DELIMITER)
@@ -168,7 +140,6 @@ func sendToAllNeighbours(node yamlConfig, cmd Command, data byte) {
 }
 
 func sendToChilds(node yamlConfig, childs []byte, cmd Command, data byte) {
-	// sendCommand(node.Neighbours[0].Address, NewFragment, 3)	// TODO: remove
 	for _, neigh := range node.Neighbours {
 		if contains(childs, neigh.ID) {
 			sendCommand(neigh.Address, cmd, data)
@@ -184,93 +155,56 @@ func sendToParent(node yamlConfig, parentId byte, cmd Command, data byte) {
 	}
 }
 
-func server(neighboursFilePath string, isStartingPoint bool) {
-	// Load node config
+func server(neighboursFilePath string) {
+	// Load node config and start server
 	var node yamlConfig = initAndParseFileNeighbours(neighboursFilePath)
-
 	srv := NewServer(node.Address + PORT)
 
-	//myLog(node.Address, "Send to "+strconv.Itoa(int(lowest.ID)))
-	time.Sleep(5000 * time.Millisecond)
-	var lowest = getLowestWeightNeighbour(node)
-	sendCommand(lowest.Address, Connect, node.ID)
-
+	// Wait for all nodes to initialize and send connection to neightbour with lowest weight
 	time.Sleep(2000 * time.Millisecond)
+	lowestNeight := getLowestWeightNeighbour(node)
+	sendCommand(lowestNeight.Address, Connect, node.ID)
 
-	//isRoot := false
+	// Wait for the answer from neightbours
+	time.Sleep(2000 * time.Millisecond)
+	answerPcks := srv.getAnswerPackets(node)
+
 	var connectRcvdIds []byte
-	for ind := 0; ind < len(node.Neighbours); ind++ {
-		// myLog(node.Address, strconv.FormatBool(srv.isPacketAvalible()))
-		if srv.isPacketAvalible() {
-			pck := srv.getPacket()
-			// myLog(node.Address, "Received "+strconv.Itoa(int(pck.Data)))
-			// Double bound
-			connectRcvdIds = append(connectRcvdIds, pck.Data)
-		}
+	for _, pck := range answerPcks {
+		connectRcvdIds = append(connectRcvdIds, pck.Data)
 	}
 
-	time.Sleep(5000 * time.Millisecond)
-
-	// Check if root of fragment tree
-	//var myFragment byte
+	// Check if I'm the root of fragment
 	var myChilds []byte
-	if contains(connectRcvdIds, lowest.ID) && (lowest.ID > node.ID) {
-		myLog(node.Address, "I'm the fragment's root")
-		//myFragment = node.ID
-
-		// Send NewFragment with my ID to all childs
-		//time.Sleep(500 * time.Second)
+	if contains(connectRcvdIds, lowestNeight.ID) && (lowestNeight.ID > node.ID) {
 		sendToChilds(node, connectRcvdIds, NewFragment, node.ID)
-		myLog(node.Address, "Sent NewFragment")
+		myLog(node.Address, "I'm the fragment's root, sent NewFragment")
 	} else {
-		// Wait to receive new fragment from parent
-		myLog(node.Address, "Wait for NewFragment")
-
 		// Remove root ID from myChilds
 		for ind := 0; ind < len(connectRcvdIds); ind++ {
-			if connectRcvdIds[ind] != lowest.ID {
+			if connectRcvdIds[ind] != lowestNeight.ID {
 				myChilds = append(myChilds, connectRcvdIds[ind])
 			}
 		}
 
-		//myParent := lowest.ID
+		// Wait to receive new fragment from master
+		var answerPcks []Packet
+		for ind := 0; ind < 200; ind++ {
+			time.Sleep(10 * time.Millisecond)
+			answerPcks = srv.getAnswerPackets(node)
 
-		time.Sleep(2 * time.Second)
-
-		var pck Packet
-		if srv.isPacketAvalible() {
-			pck = srv.getPacket()
+			if len(answerPcks) > 0 {
+				break
+			}
 		}
 
-		//pck := waitForCommand(ln)
-		//myLog(node.Address, "Recieved smth")
+		if (len(answerPcks) > 0) && (answerPcks[0].Cmd == NewFragment) {
+			myFragmentId := answerPcks[0].Data
+			myLog(node.Address, "I'm a part of fragment ID "+string(myFragmentId+'0'))
 
-		if pck.Cmd == NewFragment {
-			myLog(node.Address, "NewFragment recieved")
-			/*myFragment = pck.Data
-			sendToChilds(node, myChilds, NewFragment, myFragment)
-
-			// Wait for acknowledge from all childs
-			var acks []byte
-			var chRcv [NODES_MAX]chan Packet
-			for ind := 0; ind < len(myChilds); ind++ {
-				chRcv[ind] = make(chan Packet)
-				// go waitForCommandWithTimeout(ln, 1000, chRcv[ind])
-			}
-
-			for ind := 0; ind < len(myChilds); ind++ {
-				pck := <-chRcv[ind]
-				if pck.Data > 0 { // 0 means that no connect was sent from this neightbour (timeout)
-					acks = append(acks, byte(pck.Data))
-				}
-			}
-
-			// If each child could ack, ack to parent
-			if len(acks) == len(myChilds) && (all(acks, byte(Ack))) {
-				sendToParent(node, myParent, Ack, 0)
-			}*/
+			// Send back new fragment to children
+			sendToChilds(node, myChilds, NewFragment, myFragmentId)
 		}
-
 	}
 
 	srv.Stop()
@@ -278,15 +212,13 @@ func server(neighboursFilePath string, isStartingPoint bool) {
 
 func main() {
 	//localadress := "127.0.0.1"
-	go server("./nodes/node-1.yaml", false)
-	go server("./nodes/node-2.yaml", false)
-	go server("./nodes/node-3.yaml", false)
-	go server("./nodes/node-4.yaml", false)
-	go server("./nodes/node-5.yaml", false)
-	go server("./nodes/node-6.yaml", false)
-	go server("./nodes/node-7.yaml", false)
-	go server("./nodes/node-8.yaml", false)
-	time.Sleep(20 * time.Second) //Waiting all node to be ready
-	//server("./nodes/node-1.yaml", true)
-	time.Sleep(2 * time.Second) //Waiting all console return from nodes
+	go server("./nodes/node-1.yaml")
+	go server("./nodes/node-2.yaml")
+	go server("./nodes/node-3.yaml")
+	go server("./nodes/node-4.yaml")
+	go server("./nodes/node-5.yaml")
+	go server("./nodes/node-6.yaml")
+	go server("./nodes/node-7.yaml")
+	go server("./nodes/node-8.yaml")
+	time.Sleep(20 * time.Second)
 }
