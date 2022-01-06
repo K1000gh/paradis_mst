@@ -96,7 +96,11 @@ func initAndParseFileNeighbours(filename string) yamlConfig {
 }
 
 func myLog(localAdress string, message string) {
-	fmt.Printf("[%s] : %s\n", localAdress, message)
+	enabled := true
+
+	if enabled {
+		fmt.Printf("[%s] : %s\n", localAdress, message)
+	}
 }
 
 func send(nodeAddress string, neighAddress string) {
@@ -172,6 +176,14 @@ func sendToChilds(node yamlConfig, childs []byte, cmd Command, data byte) {
 	}
 }
 
+func sendToParent(node yamlConfig, parentId byte, cmd Command, data byte) {
+	for _, neigh := range node.Neighbours {
+		if neigh.ID == parentId {
+			sendCommand(neigh.Address, cmd, data)
+		}
+	}
+}
+
 func server(neighboursFilePath string, isStartingPoint bool) {
 	// Load node config
 	var node yamlConfig = initAndParseFileNeighbours(neighboursFilePath)
@@ -229,6 +241,8 @@ func server(neighboursFilePath string, isStartingPoint bool) {
 			}
 		}
 
+		myParent := lowest.ID
+
 		pck := waitForCommand(ln)
 		myLog(node.Address, "Recieved smth")
 
@@ -254,7 +268,7 @@ func server(neighboursFilePath string, isStartingPoint bool) {
 
 			// If each child could ack, ack to parent
 			if len(acks) == len(myChilds) && (all(acks, byte(Ack))) {
-
+				sendToParent(node, myParent, Ack, 0)
 			}
 		}
 
