@@ -188,47 +188,39 @@ func server(neighboursFilePath string, isStartingPoint bool) {
 	// Load node config
 	var node yamlConfig = initAndParseFileNeighbours(neighboursFilePath)
 
-	// Listen for incomming connections
-	// myLog(node.Address, "Starting server .... and listening ...")
-	ln, err := net.Listen("tcp", node.Address+PORT)
-	if err != nil {
-		log.Fatal(err)
-		return
-	}
+	srv := NewServer(node.Address + PORT)
 
-	// Wait for answer from each node neighbour
-	var connectRcvdIds []byte
-	var chRcv [NODES_MAX]chan Packet
-	for ind := 0; ind < len(node.Neighbours); ind++ {
-		chRcv[ind] = make(chan Packet)
-		go waitForCommandWithTimeout(ln, 1000, chRcv[ind])
-	}
-
-	// Send connect to neightbours with lowest weight
+	//myLog(node.Address, "Send to "+strconv.Itoa(int(lowest.ID)))
+	time.Sleep(5000 * time.Millisecond)
 	var lowest = getLowestWeightNeighbour(node)
-	time.Sleep(200 * time.Millisecond) // Wait some time for all nodes to be ready
 	sendCommand(lowest.Address, Connect, node.ID)
 
+	time.Sleep(2000 * time.Millisecond)
+
+	//isRoot := false
+	var connectRcvdIds []byte
 	for ind := 0; ind < len(node.Neighbours); ind++ {
-		pck := <-chRcv[ind]
-		if pck.Data > 0 { // 0 means that no connect was sent from this neightbour (timeout)
-			connectRcvdIds = append(connectRcvdIds, byte(pck.Data))
+		// myLog(node.Address, strconv.FormatBool(srv.isPacketAvalible()))
+		if srv.isPacketAvalible() {
+			pck := srv.getPacket()
+			// myLog(node.Address, "Received "+strconv.Itoa(int(pck.Data)))
+			// Double bound
+			connectRcvdIds = append(connectRcvdIds, pck.Data)
 		}
 	}
 
+	time.Sleep(5000 * time.Millisecond)
+
 	// Check if root of fragment tree
-	var myFragment byte
+	//var myFragment byte
 	var myChilds []byte
 	if contains(connectRcvdIds, lowest.ID) && (lowest.ID > node.ID) {
 		myLog(node.Address, "I'm the fragment's root")
-		myFragment = node.ID
+		//myFragment = node.ID
 
 		// Send NewFragment with my ID to all childs
-		time.Sleep(2 * time.Second)
+		//time.Sleep(500 * time.Second)
 		sendToChilds(node, connectRcvdIds, NewFragment, node.ID)
-		sendToChilds(node, connectRcvdIds, NewFragment, node.ID)
-		sendToChilds(node, connectRcvdIds, NewFragment, node.ID)
-		sendToChilds(node, connectRcvdIds, NewFragment, node.ID) // TODO: check if with one call cant send
 		myLog(node.Address, "Sent NewFragment")
 	} else {
 		// Wait to receive new fragment from parent
@@ -241,14 +233,21 @@ func server(neighboursFilePath string, isStartingPoint bool) {
 			}
 		}
 
-		myParent := lowest.ID
+		//myParent := lowest.ID
 
-		pck := waitForCommand(ln)
-		myLog(node.Address, "Recieved smth")
+		time.Sleep(2 * time.Second)
+
+		var pck Packet
+		if srv.isPacketAvalible() {
+			pck = srv.getPacket()
+		}
+
+		//pck := waitForCommand(ln)
+		//myLog(node.Address, "Recieved smth")
 
 		if pck.Cmd == NewFragment {
 			myLog(node.Address, "NewFragment recieved")
-			myFragment = pck.Data
+			/*myFragment = pck.Data
 			sendToChilds(node, myChilds, NewFragment, myFragment)
 
 			// Wait for acknowledge from all childs
@@ -256,7 +255,7 @@ func server(neighboursFilePath string, isStartingPoint bool) {
 			var chRcv [NODES_MAX]chan Packet
 			for ind := 0; ind < len(myChilds); ind++ {
 				chRcv[ind] = make(chan Packet)
-				go waitForCommandWithTimeout(ln, 1000, chRcv[ind])
+				// go waitForCommandWithTimeout(ln, 1000, chRcv[ind])
 			}
 
 			for ind := 0; ind < len(myChilds); ind++ {
@@ -269,10 +268,12 @@ func server(neighboursFilePath string, isStartingPoint bool) {
 			// If each child could ack, ack to parent
 			if len(acks) == len(myChilds) && (all(acks, byte(Ack))) {
 				sendToParent(node, myParent, Ack, 0)
-			}
+			}*/
 		}
 
 	}
+
+	srv.Stop()
 }
 
 func main() {
