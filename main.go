@@ -196,11 +196,6 @@ func server(neighboursFilePath string, isStartingPoint bool) {
 		return
 	}
 
-	// Send connect to neightbours with lowest weight
-	var lowest = getLowestWeightNeighbour(node)
-	time.Sleep(2 * time.Second) // Wait some time for all nodes to be ready
-	sendCommand(lowest.Address, Connect, node.ID)
-
 	// Wait for answer from each node neighbour
 	var connectRcvdIds []byte
 	var chRcv [NODES_MAX]chan Packet
@@ -208,6 +203,11 @@ func server(neighboursFilePath string, isStartingPoint bool) {
 		chRcv[ind] = make(chan Packet)
 		go waitForCommandWithTimeout(ln, 1000, chRcv[ind])
 	}
+
+	// Send connect to neightbours with lowest weight
+	var lowest = getLowestWeightNeighbour(node)
+	time.Sleep(200 * time.Millisecond) // Wait some time for all nodes to be ready
+	sendCommand(lowest.Address, Connect, node.ID)
 
 	for ind := 0; ind < len(node.Neighbours); ind++ {
 		pck := <-chRcv[ind]
