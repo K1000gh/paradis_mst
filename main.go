@@ -155,6 +155,20 @@ func sendToParent(node yamlConfig, parentId byte, cmd Command, data byte) {
 	}
 }
 
+func pollPacketsReceive(node yamlConfig, srv *Server) []Packet {
+	var answerPcks []Packet
+	for ind := 0; ind < 200; ind++ {
+		time.Sleep(10 * time.Millisecond)
+		answerPcks = srv.getAnswerPackets(node)
+
+		if len(answerPcks) > 0 {
+			break
+		}
+	}
+
+	return answerPcks
+}
+
 func server(neighboursFilePath string) {
 	// Load node config and start server
 	var node yamlConfig = initAndParseFileNeighbours(neighboursFilePath)
@@ -174,36 +188,61 @@ func server(neighboursFilePath string) {
 		connectRcvdIds = append(connectRcvdIds, pck.Data)
 	}
 
-	// Check if I'm the root of fragment
+	// Remove root ID from myChilds
 	var myChilds []byte
+	for ind := 0; ind < len(connectRcvdIds); ind++ {
+		if connectRcvdIds[ind] != lowestNeight.ID {
+			myChilds = append(myChilds, connectRcvdIds[ind])
+		}
+	}
+
+	// Check if I'm the root of fragment
 	if contains(connectRcvdIds, lowestNeight.ID) && (lowestNeight.ID > node.ID) {
 		sendToChilds(node, connectRcvdIds, NewFragment, node.ID)
 		myLog(node.Address, "I'm the fragment's root, sent NewFragment")
+
+		// Wait for Ack from all children
+		time.Sleep(2000 * time.Millisecond)
+		childAnswerPcks := srv.getAnswerPackets(node)
+		allChildsAck := true
+		if len(childAnswerPcks) != len(myChilds) {
+			allChildsAck = false
+		} else {
+			for ind := 0; ind < len(myChilds); ind++ {
+				if childAnswerPcks[ind].Cmd != Ack {
+					allChildsAck = false
+				}
+			}
+		}
+
+		if allChildsAck {
+			myLog(node.Address, "Children Acknowledged to NewFragment")
+		} else {
+			myLog(node.Address, "Not all children Acknowledged to NewFragment")
+		}
 	} else {
-		// Remove root ID from myChilds
-		for ind := 0; ind < len(connectRcvdIds); ind++ {
-			if connectRcvdIds[ind] != lowestNeight.ID {
-				myChilds = append(myChilds, connectRcvdIds[ind])
-			}
-		}
+		myParentId := lowestNeight.ID
 
-		// Wait to receive new fragment from master
-		var answerPcks []Packet
-		for ind := 0; ind < 200; ind++ {
-			time.Sleep(10 * time.Millisecond)
-			answerPcks = srv.getAnswerPackets(node)
-
-			if len(answerPcks) > 0 {
-				break
-			}
-		}
-
+		// Wait to receive NewFragment from master
+		answerPcks := pollPacketsReceive(node, srv)
 		if (len(answerPcks) > 0) && (answerPcks[0].Cmd == NewFragment) {
 			myFragmentId := answerPcks[0].Data
 			myLog(node.Address, "I'm a part of fragment ID "+string(myFragmentId+'0'))
 
-			// Send back new fragment to children
-			sendToChilds(node, myChilds, NewFragment, myFragmentId)
+			// Send back new fragment to children, otherwise Acknowledge to parent that complete
+			if len(myChilds) == 0 {
+				sendToParent(node, myParentId, Ack, 0)
+			} else {
+				sendToChilds(node, myChilds, NewFragment, myFragmentId)
+
+				// Wait for Ack from child
+				childAnswerPcks := pollPacketsReceive(node, srv)
+				if (len(childAnswerPcks) > 0) && (childAnswerPcks[0].Cmd == Ack) {
+					myLog(node.Address, "Send Ack to "+string(myParentId+'0'))
+					sendToParent(node, myParentId, Ack, 0)
+				}
+			}
+
 		}
 	}
 
