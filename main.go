@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -34,15 +33,17 @@ const (
 	Connect     Command = 0
 	NewFragment         = 1
 	Report              = 2
-	Accept              = 3
-	Reject              = 4
-	Merge               = 5
-	Ack                 = 6
+	Test                = 3
+	Accept              = 4
+	Reject              = 5
+	Merge               = 6
+	Ack                 = 7
 )
 
 type Packet struct {
 	Cmd  Command
 	Data byte
+	Src  byte
 }
 
 func getLowestWeightNeighbour(node yamlConfig) Neigh {
@@ -99,7 +100,7 @@ func myLog(localAdress string, message string) {
 	}
 }
 
-func send(nodeAddress string, neighAddress string) {
+/*func send(nodeAddress string, neighAddress string) {
 	myLog(nodeAddress, "Sending message to "+neighAddress)
 	outConn, err := net.Dial("tcp", neighAddress+PORT)
 	if err != nil {
@@ -108,20 +109,20 @@ func send(nodeAddress string, neighAddress string) {
 	}
 	outConn.Write([]byte(nodeAddress))
 	outConn.Close()
-}
+}*/
 
-func sendCommand(neighAddress string, cmd Command, data byte) {
+func sendCommand(neighAddress string, cmd Command, data byte, src byte) {
 	outConn, err := net.Dial("tcp", neighAddress+PORT)
 	if err != nil {
 		log.Fatal(err)
 		return
 	}
 
-	outConn.Write([]byte{byte(cmd), data, DELIMITER})
+	outConn.Write([]byte{byte(cmd), data, src, DELIMITER})
 	outConn.Close()
 }
 
-func waitForCommand(ln net.Listener) Packet {
+/*func waitForCommand(ln net.Listener) Packet {
 	conn, _ := ln.Accept()
 	rcvd, _ := bufio.NewReader(conn).ReadBytes(DELIMITER)
 	conn.Close()
@@ -130,27 +131,33 @@ func waitForCommand(ln net.Listener) Packet {
 	pck.Cmd = Command(rcvd[0])
 	pck.Data = rcvd[1]
 	return pck
-}
+}*/
 
-func sendToAllNeighbours(node yamlConfig, cmd Command, data byte) {
+/*func sendToAllNeighbours(node yamlConfig, cmd Command, data byte) {
 	myLog(node.Address, "Sending message to all neighbours...")
 	for _, neigh := range node.Neighbours {
 		go send(node.Address, neigh.Address)
 	}
-}
+}*/
 
 func sendToChilds(node yamlConfig, childs []byte, cmd Command, data byte) {
 	for _, neigh := range node.Neighbours {
 		if contains(childs, neigh.ID) {
-			sendCommand(neigh.Address, cmd, data)
+			sendCommand(neigh.Address, cmd, data, node.ID)
 		}
+	}
+}
+
+func sendToNeighbours(node yamlConfig, cmd Command, data byte) {
+	for _, neigh := range node.Neighbours {
+		sendCommand(neigh.Address, cmd, data, node.ID)
 	}
 }
 
 func sendToParent(node yamlConfig, parentId byte, cmd Command, data byte) {
 	for _, neigh := range node.Neighbours {
 		if neigh.ID == parentId {
-			sendCommand(neigh.Address, cmd, data)
+			sendCommand(neigh.Address, cmd, data, node.ID)
 		}
 	}
 }
@@ -177,7 +184,7 @@ func server(neighboursFilePath string) {
 	// Wait for all nodes to initialize and send connection to neightbour with lowest weight
 	time.Sleep(2000 * time.Millisecond)
 	lowestNeight := getLowestWeightNeighbour(node)
-	sendCommand(lowestNeight.Address, Connect, node.ID)
+	sendCommand(lowestNeight.Address, Connect, node.ID, node.ID)
 
 	// Wait for the answer from neightbours
 	time.Sleep(2000 * time.Millisecond)
@@ -187,6 +194,9 @@ func server(neighboursFilePath string) {
 	for _, pck := range answerPcks {
 		connectRcvdIds = append(connectRcvdIds, pck.Data)
 	}
+
+	fragmentID := node.ID
+	parentID := node.ID
 
 	// Check if I'm the root of fragment
 	if contains(connectRcvdIds, lowestNeight.ID) && (lowestNeight.ID > node.ID) {
@@ -228,31 +238,75 @@ func server(neighboursFilePath string) {
 				myChilds = append(myChilds, connectRcvdIds[ind])
 			}
 		}
-		myParentId := lowestNeight.ID
+		parentID = lowestNeight.ID
 
 		// Wait to receive NewFragment from master
 		answerPcks := pollPacketsReceive(node, srv)
 		if (len(answerPcks) > 0) && (answerPcks[0].Cmd == NewFragment) {
-			myFragmentId := answerPcks[0].Data
-			myLog(node.Address, "I'm a part of fragment ID "+string(myFragmentId+'0'))
+			fragmentID = answerPcks[0].Data
+			myLog(node.Address, "I'm a part of fragment ID "+string(fragmentID+'0'))
 
 			// Send back new fragment to children, otherwise Acknowledge to parent that complete
 			if len(myChilds) == 0 {
-				sendToParent(node, myParentId, Ack, 0)
-				myLog(node.Address, "Send Ack to NewFragment to "+string(myParentId+'0'))
+				sendToParent(node, parentID, Ack, 0)
+				myLog(node.Address, "Send Ack to NewFragment to "+string(parentID+'0'))
 			} else {
-				sendToChilds(node, myChilds, NewFragment, myFragmentId)
+				sendToChilds(node, myChilds, NewFragment, fragmentID)
 
 				// Wait for Ack from child
 				childAnswerPcks := pollPacketsReceive(node, srv)
 				if (len(childAnswerPcks) > 0) && (childAnswerPcks[0].Cmd == Ack) {
-					myLog(node.Address, "Send Ack to NewFragment to "+string(myParentId+'0'))
-					sendToParent(node, myParentId, Ack, 0)
+					myLog(node.Address, "Send Ack to NewFragment to "+string(parentID+'0'))
+					sendToParent(node, parentID, Ack, 0)
 				}
 			}
 
 		}
 	}
+
+	time.Sleep(2000 * time.Millisecond)
+
+	/*for _, neigh := range node.Neighbours {
+		sendCommand(neigh.Address, Test, fragmentID)
+		answer := srv.getPacket()
+	}*/
+	sendToNeighbours(node, Test, fragmentID)
+	time.Sleep(2000 * time.Millisecond)
+	testPcks := srv.getAnswerPackets(node) // Recv pcks
+
+	for _, pck := range testPcks {
+		if fragmentID == pck.Data {
+			for _, neigh := range node.Neighbours {
+				if neigh.ID == pck.Src {
+					sendCommand(neigh.Address, Reject, 0, node.ID)
+				}
+			}
+		} else {
+			for _, neigh := range node.Neighbours {
+				if neigh.ID == pck.Src {
+					sendCommand(neigh.Address, Accept, 0, node.ID)
+				}
+			}
+		}
+	}
+
+	time.Sleep(2000 * time.Millisecond)
+
+	var testAccept []byte
+	for _, pck := range srv.getAnswerPackets(node) {
+		if pck.Cmd == Accept {
+			testAccept = append(testAccept, pck.Src)
+		}
+	}
+
+	/*if len(testAccept) > 0 {
+		for _, accept := testAccept {
+
+		}
+		sendToParent(node, parentID, Report, )
+	}*/
+
+	fmt.Printf("%v", testAccept)
 
 	srv.Stop()
 }
