@@ -96,8 +96,8 @@ func (s *Server) getPacket() Packet {
 
 	var pck Packet
 	pck.Cmd = Command(data[0])
-	pck.Data = data[1]
-	pck.Src = data[2]
+	pck.Src = data[1]
+	pck.Data = data[2:]
 	s.packetsCnt--
 	return pck
 }
