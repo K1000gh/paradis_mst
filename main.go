@@ -12,8 +12,9 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-var PORT string = ":30000"
-var LOG bool = true
+const PORT = ":30000"
+const LOG = true
+const CMDLOG = true
 
 type Neigh struct {
 	ID         byte   `yaml:"id"`
@@ -40,6 +41,16 @@ const (
 	Merge               = 6
 	Ack                 = 7
 )
+
+var COMMAND = []string{
+	"CONNECT",
+	"NEW_FRAG",
+	"REPORT",
+	"TEST",
+	"ACCEPT",
+	"REJECT",
+	"MERGE",
+}
 
 type Packet struct {
 	Cmd  Command
@@ -115,7 +126,11 @@ func sendCommand(neighAddress string, cmd Command, data []byte, src byte) {
 		return
 	}
 
-	outConn.Write(append(append([]byte{byte(cmd), src}, data[:]...), DELIMITER))
+	if CMDLOG {
+		fmt.Printf("[%s(%v)] From %s to %s\n", COMMAND[cmd], data, string(src+'0'), neighAddress)
+	}
+
+	outConn.Write(append([]byte{byte(cmd), src}, data[:]...))
 	outConn.Close()
 }
 
@@ -181,13 +196,14 @@ func server(neighboursFilePath string) {
 		if root {
 			myLog(node.Address, "I'm the fragment's root")
 		} else {
-			// Wait to receive NewFragment from the root node
-			answer := pollPacketsReceive(node, srv, 1)[0]
+			// Wait to receive NEW_FRAG message from the root node
+			newfrag := pollPacketsReceive(node, srv, 1)[0]
 
-			fragmentID = answer.Data[0]
-			parentID = answer.Src
+			fragmentID = newfrag.Data[0]
+			parentID = newfrag.Src // New fragment is always received from the parent node
 			myLog(node.Address, "I'm a part of fragment ID "+string(fragmentID+'0'))
 
+			// Removes parent node from the children
 			t := find(childs, parentID)
 			if t < len(childs) {
 				childs = append(childs[:t], childs[t+1:]...)
@@ -224,6 +240,7 @@ func server(neighboursFilePath string) {
 
 		time.Sleep(1000 * time.Millisecond)
 
+		// Nodes without any children starts to report
 		if len(childs) > 0 {
 			for _, pck := range pollPacketsReceive(node, srv, len(childs)) {
 				if len(pck.Data) > 1 {
@@ -238,17 +255,21 @@ func server(neighboursFilePath string) {
 
 		merge := func() Packet {
 			if root {
-				if len(testAccept) == 0 {
-					return Packet{Merge, node.ID, []byte{0}} // Finished
-				}
+				return Packet{Merge, node.ID, func() []byte {
+					if len(testAccept) > 0 {
+						return []byte{testAccept[0][0]}
+					}
 
-				return Packet{Merge, node.ID, []byte{testAccept[0][0]}}
+					return []byte{0}
+				}()}
 			} else {
-				if len(testAccept) > 0 {
-					sendToParent(node, parentID, Report, testAccept[0])
-				} else {
-					sendToParent(node, parentID, Report, []byte{})
-				}
+				sendToParent(node, parentID, Report, func() []byte {
+					if len(testAccept) > 0 {
+						return testAccept[0]
+					}
+
+					return []byte{}
+				}())
 
 				time.Sleep(1000 * time.Millisecond)
 				return pollPacketsReceive(node, srv, 1)[0]
@@ -259,6 +280,7 @@ func server(neighboursFilePath string) {
 		time.Sleep(1000 * time.Millisecond)
 
 		if merge.Data[0] > 0 {
+			// MERGE phase, reset root node
 			root = false
 			neigh := getNeighbour(node, merge.Data[0])
 
@@ -268,6 +290,7 @@ func server(neighboursFilePath string) {
 				sendCommand(neigh.Address, Connect, []byte{node.ID}, node.ID)
 				rcv := pollPacketsReceive(node, srv, 1)[0]
 
+				// The node with the lowest ID becomes the new root
 				if node.ID < rcv.Data[0] {
 					fragmentID = node.ID
 					childs = append(childs, neigh.ID)
@@ -283,13 +306,12 @@ func server(neighboursFilePath string) {
 			myLog(node.Address, "FINISHED")
 			break
 		}
-	}
+	} // Back to step 2 (NEW_FRAG)
 
 	srv.Stop()
 }
 
 func main() {
-	//localadress := "127.0.0.1"
 	go server("./nodes/node-1.yaml")
 	go server("./nodes/node-2.yaml")
 	go server("./nodes/node-3.yaml")
