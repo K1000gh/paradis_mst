@@ -115,7 +115,7 @@ func initAndParseFileNeighbours(filename string) yamlConfig {
 
 func myLog(localAdress string, message string) {
 	if LOG {
-		fmt.Printf("[%s] : %s\n", localAdress, message)
+		fmt.Printf("+ [%s] : %s\n", localAdress, message)
 	}
 }
 
@@ -127,7 +127,7 @@ func sendCommand(neighAddress string, cmd Command, data []byte, src byte) {
 	}
 
 	if CMDLOG {
-		fmt.Printf("[%s(%v)] From %s to %s\n", COMMAND[cmd], data, string(src+'0'), neighAddress)
+		fmt.Printf(" { %s%v } From %s to %s\n", COMMAND[cmd], data, string(src+'0'), neighAddress)
 	}
 
 	outConn.Write(append([]byte{byte(cmd), src}, data[:]...))
@@ -203,7 +203,7 @@ func server(neighboursFilePath string) {
 			parentID = newfrag.Src // New fragment is always received from the parent node
 			myLog(node.Address, "I'm a part of fragment ID "+string(fragmentID+'0'))
 
-			// Removes parent node from the children
+			// Remove parent node from the children
 			t := find(childs, parentID)
 			if t < len(childs) {
 				childs = append(childs[:t], childs[t+1:]...)
@@ -212,6 +212,7 @@ func server(neighboursFilePath string) {
 
 		sendToChilds(node, childs, NewFragment, []byte{fragmentID})
 		time.Sleep(1000 * time.Millisecond)
+
 		sendToNeighbours(node, Test, []byte{fragmentID})
 		time.Sleep(1000 * time.Millisecond)
 
@@ -225,7 +226,7 @@ func server(neighboursFilePath string) {
 				}
 			}()
 
-			sendCommand(neigh.Address, cmd, []byte{0}, node.ID)
+			sendCommand(neigh.Address, cmd, []byte{}, node.ID)
 		}
 
 		time.Sleep(1000 * time.Millisecond)
@@ -260,7 +261,7 @@ func server(neighboursFilePath string) {
 						return []byte{testAccept[0][0]}
 					}
 
-					return []byte{0}
+					return []byte{}
 				}()}
 			} else {
 				sendToParent(node, parentID, Report, func() []byte {
@@ -279,7 +280,7 @@ func server(neighboursFilePath string) {
 		sendToChilds(node, childs, merge.Cmd, merge.Data)
 		time.Sleep(1000 * time.Millisecond)
 
-		if merge.Data[0] > 0 {
+		if len(merge.Data) > 0 {
 			// MERGE phase, reset root node
 			root = false
 			neigh := getNeighbour(node, merge.Data[0])
