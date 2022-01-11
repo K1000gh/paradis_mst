@@ -293,13 +293,11 @@ func server(neighboursFilePath string) {
 
 				// The node with the lowest ID becomes the new root
 				if node.ID < rcv.Data[0] {
+					childs = append(childs, parentID, neigh.ID)
+
 					fragmentID = node.ID
-					childs = append(childs, neigh.ID)
-					childs = append(childs, parentID)
 					parentID = node.ID
 					root = true
-				} else {
-					parentID = neigh.ID
 				}
 			}
 		} else {
