@@ -7,6 +7,8 @@ import (
 	"net"
 	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v2"
@@ -14,7 +16,7 @@ import (
 
 const PORT = ":30000"
 const LOG = true
-const CMDLOG = true
+const CMDLOG = false
 
 type Neigh struct {
 	ID         byte   `yaml:"id"`
@@ -39,7 +41,6 @@ const (
 	Accept              = 4
 	Reject              = 5
 	Merge               = 6
-	Ack                 = 7
 )
 
 var COMMAND = []string{
@@ -127,7 +128,7 @@ func sendCommand(neighAddress string, cmd Command, data []byte, src byte) {
 	}
 
 	if CMDLOG {
-		fmt.Printf(" { %s%v } From %s to %s\n", COMMAND[cmd], data, string(src+'0'), neighAddress)
+		fmt.Printf(" { %s%v } From %s to %s\n", COMMAND[cmd], data, strconv.Itoa(int(src)), neighAddress)
 	}
 
 	outConn.Write(append([]byte{byte(cmd), src}, data[:]...))
@@ -194,39 +195,51 @@ func server(neighboursFilePath string) {
 
 	for {
 		if root {
-			myLog(node.Address, "I'm the fragment's root")
+			myLog(node.Address, "I'm the fragment's root!. My childs are ["+
+				strings.Trim(strings.Join(strings.Fields(fmt.Sprint(childs)), ", "), "[]")+"]")
 		} else {
 			// Wait to receive NEW_FRAG message from the root node
 			newfrag := pollPacketsReceive(node, srv, 1)[0]
 
-			fragmentID = newfrag.Data[0]
-			parentID = newfrag.Src // New fragment is always received from the parent node
-			myLog(node.Address, "I'm a part of fragment ID "+string(fragmentID+'0'))
+			if newfrag.Cmd == NewFragment {
+				fragmentID = newfrag.Data[0]
+				parentID = newfrag.Src // New fragment is always received from the parent node
 
-			// Remove parent node from the children
-			t := find(childs, parentID)
-			if t < len(childs) {
-				childs = append(childs[:t], childs[t+1:]...)
+				// Remove parent node from the children
+				t := find(childs, parentID)
+				if t < len(childs) {
+					childs = append(childs[:t], childs[t+1:]...)
+				}
+
+				myLog(node.Address, "I'm a part of fragment ID "+strconv.Itoa(int(fragmentID))+
+					". My childs are ["+strings.Trim(strings.Join(strings.Fields(fmt.Sprint(childs)), ", "), "[]")+"]")
+			} else {
+				myLog(node.Address, "ERROR: WRONG COMMAND (expected NEW_FRAG): "+COMMAND[int(newfrag.Cmd)])
 			}
 		}
 
 		sendToChilds(node, childs, NewFragment, []byte{fragmentID})
-		time.Sleep(1000 * time.Millisecond)
+		time.Sleep(1500 * time.Millisecond)
 
 		sendToNeighbours(node, Test, []byte{fragmentID})
 		time.Sleep(1000 * time.Millisecond)
 
 		for _, pck := range pollPacketsReceive(node, srv, len(node.Neighbours)) {
 			neigh := getNeighbour(node, pck.Src)
-			cmd := func() Command {
-				if fragmentID == pck.Data[0] {
-					return Reject
-				} else {
-					return Accept
-				}
-			}()
+			var cmd Command
+			if pck.Cmd == Test {
+				cmd = func() Command {
+					if fragmentID == pck.Data[0] {
+						return Reject
+					} else {
+						return Accept
+					}
+				}()
 
-			sendCommand(neigh.Address, cmd, []byte{}, node.ID)
+				sendCommand(neigh.Address, cmd, []byte{}, node.ID)
+			} else {
+				myLog(node.Address, "ERROR: WRONG COMMAND (expected TEST): "+COMMAND[int(pck.Cmd)])
+			}
 		}
 
 		time.Sleep(1000 * time.Millisecond)
@@ -292,12 +305,14 @@ func server(neighboursFilePath string) {
 				rcv := pollPacketsReceive(node, srv, 1)[0]
 
 				// The node with the lowest ID becomes the new root
-				if node.ID < rcv.Data[0] {
-					childs = append(childs, parentID, neigh.ID)
+				if rcv.Cmd == Connect {
+					if node.ID < rcv.Data[0] {
+						childs = append(childs, parentID, neigh.ID)
 
-					fragmentID = node.ID
-					parentID = node.ID
-					root = true
+						fragmentID = node.ID
+						parentID = node.ID
+						root = true
+					}
 				}
 			}
 		} else {

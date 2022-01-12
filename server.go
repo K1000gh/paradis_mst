@@ -67,7 +67,6 @@ func (s *Server) handleConection(conn net.Conn) {
 	defer conn.Close()
 	buf := make([]byte, 2048)
 	for {
-		//n, err := conn.Read(buf)
 		n, err := conn.Read(buf)
 		if err != nil && err != io.EOF {
 			log.Println("read error", err)
@@ -77,8 +76,6 @@ func (s *Server) handleConection(conn net.Conn) {
 			return
 		}
 		s.packetsCnt++
-		//log.Printf("received from %v: %s (%d)", conn.RemoteAddr(), string(buf[:n]), n)
-		// fmt.Println(string(buf[:n]))
 		s.chData <- buf[:n]
 	}
 }

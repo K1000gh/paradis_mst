@@ -41,4 +41,4 @@ The algorithm follows the GHS phases:
 
 ## Test cases
 
-![Test case 1](./img/test_case.png)
+![Test case 1](./img/test_case_1.png)
