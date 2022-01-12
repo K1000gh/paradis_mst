@@ -194,9 +194,11 @@ func server(neighboursFilePath string) {
 	childs := connected
 
 	for {
+		var newFragmentRcvd bool
 		if root {
 			myLog(node.Address, "I'm the fragment's root!. My childs are ["+
 				strings.Trim(strings.Join(strings.Fields(fmt.Sprint(childs)), ", "), "[]")+"]")
+			newFragmentRcvd = true // No need to wait for NewFragment when root
 		} else {
 			// Wait to receive NEW_FRAG message from the root node
 			newfrag := pollPacketsReceive(node, srv, 1)[0]
@@ -213,112 +215,116 @@ func server(neighboursFilePath string) {
 
 				myLog(node.Address, "I'm a part of fragment ID "+strconv.Itoa(int(fragmentID))+
 					". My childs are ["+strings.Trim(strings.Join(strings.Fields(fmt.Sprint(childs)), ", "), "[]")+"]")
+
+				newFragmentRcvd = true
 			} else {
 				myLog(node.Address, "ERROR: WRONG COMMAND (expected NEW_FRAG): "+COMMAND[int(newfrag.Cmd)])
 			}
 		}
 
 		sendToChilds(node, childs, NewFragment, []byte{fragmentID})
-		time.Sleep(1500 * time.Millisecond)
-
-		sendToNeighbours(node, Test, []byte{fragmentID})
 		time.Sleep(1000 * time.Millisecond)
 
-		for _, pck := range pollPacketsReceive(node, srv, len(node.Neighbours)) {
-			neigh := getNeighbour(node, pck.Src)
-			var cmd Command
-			if pck.Cmd == Test {
-				cmd = func() Command {
-					if fragmentID == pck.Data[0] {
-						return Reject
-					} else {
-						return Accept
-					}
-				}()
+		if newFragmentRcvd {
+			sendToNeighbours(node, Test, []byte{fragmentID})
+			time.Sleep(1000 * time.Millisecond)
 
-				sendCommand(neigh.Address, cmd, []byte{}, node.ID)
-			} else {
-				myLog(node.Address, "ERROR: WRONG COMMAND (expected TEST): "+COMMAND[int(pck.Cmd)])
-			}
-		}
-
-		time.Sleep(1000 * time.Millisecond)
-
-		var testAccept [][]byte
-		for _, pck := range pollPacketsReceive(node, srv, len(node.Neighbours)) {
-			if pck.Cmd == Accept {
+			for _, pck := range pollPacketsReceive(node, srv, len(node.Neighbours)) {
 				neigh := getNeighbour(node, pck.Src)
-				testAccept = append(testAccept, []byte{neigh.ID, byte(neigh.EdgeWeight)})
-			}
-		}
+				var cmd Command
+				if pck.Cmd == Test {
+					cmd = func() Command {
+						if fragmentID == pck.Data[0] {
+							return Reject
+						} else {
+							return Accept
+						}
+					}()
 
-		time.Sleep(1000 * time.Millisecond)
-
-		// Nodes without any children starts to report
-		if len(childs) > 0 {
-			for _, pck := range pollPacketsReceive(node, srv, len(childs)) {
-				if len(pck.Data) > 1 {
-					testAccept = append(testAccept, []byte{pck.Data[0], pck.Data[1]})
+					sendCommand(neigh.Address, cmd, []byte{}, node.ID)
+				} else {
+					myLog(node.Address, "ERROR: WRONG COMMAND (expected TEST): "+COMMAND[int(pck.Cmd)])
 				}
 			}
-		}
 
-		sort.Slice(testAccept, func(i, j int) bool {
-			return testAccept[i][1] < testAccept[j][1]
-		})
+			time.Sleep(1000 * time.Millisecond)
 
-		merge := func() Packet {
-			if root {
-				return Packet{Merge, node.ID, func() []byte {
-					if len(testAccept) > 0 {
-						return []byte{testAccept[0][0]}
+			var testAccept [][]byte
+			for _, pck := range pollPacketsReceive(node, srv, len(node.Neighbours)) {
+				if pck.Cmd == Accept {
+					neigh := getNeighbour(node, pck.Src)
+					testAccept = append(testAccept, []byte{neigh.ID, byte(neigh.EdgeWeight)})
+				}
+			}
+
+			time.Sleep(1000 * time.Millisecond)
+
+			// Nodes without any children starts to report
+			if len(childs) > 0 {
+				for _, pck := range pollPacketsReceive(node, srv, len(childs)) {
+					if len(pck.Data) > 1 {
+						testAccept = append(testAccept, []byte{pck.Data[0], pck.Data[1]})
 					}
+				}
+			}
 
-					return []byte{}
-				}()}
+			sort.Slice(testAccept, func(i, j int) bool {
+				return testAccept[i][1] < testAccept[j][1]
+			})
+
+			merge := func() Packet {
+				if root {
+					return Packet{Merge, node.ID, func() []byte {
+						if len(testAccept) > 0 {
+							return []byte{testAccept[0][0]}
+						}
+
+						return []byte{}
+					}()}
+				} else {
+					sendToParent(node, parentID, Report, func() []byte {
+						if len(testAccept) > 0 {
+							return testAccept[0]
+						}
+
+						return []byte{}
+					}())
+
+					time.Sleep(1000 * time.Millisecond)
+					return pollPacketsReceive(node, srv, 1)[0]
+				}
+			}()
+
+			sendToChilds(node, childs, merge.Cmd, merge.Data)
+			time.Sleep(1000 * time.Millisecond)
+
+			if len(merge.Data) > 0 {
+				// MERGE phase, reset root node
+				root = false
+				neigh := getNeighbour(node, merge.Data[0])
+
+				if neigh != (Neigh{}) {
+					myLog(node.Address, "I'm the neighbour in charge of the merge")
+
+					sendCommand(neigh.Address, Connect, []byte{node.ID}, node.ID)
+					rcv := pollPacketsReceive(node, srv, 1)[0]
+
+					// The node with the lowest ID becomes the new root
+					if rcv.Cmd == Connect {
+						if node.ID < rcv.Data[0] {
+							childs = append(childs, parentID, neigh.ID)
+
+							fragmentID = node.ID
+							parentID = node.ID
+							root = true
+						}
+					}
+				}
 			} else {
-				sendToParent(node, parentID, Report, func() []byte {
-					if len(testAccept) > 0 {
-						return testAccept[0]
-					}
-
-					return []byte{}
-				}())
-
-				time.Sleep(1000 * time.Millisecond)
-				return pollPacketsReceive(node, srv, 1)[0]
+				// FINISHED
+				myLog(node.Address, "FINISHED")
+				break
 			}
-		}()
-
-		sendToChilds(node, childs, merge.Cmd, merge.Data)
-		time.Sleep(1000 * time.Millisecond)
-
-		if len(merge.Data) > 0 {
-			// MERGE phase, reset root node
-			root = false
-			neigh := getNeighbour(node, merge.Data[0])
-
-			if neigh != (Neigh{}) {
-				myLog(node.Address, "I'm the neighbour in charge of the merge")
-
-				sendCommand(neigh.Address, Connect, []byte{node.ID}, node.ID)
-				rcv := pollPacketsReceive(node, srv, 1)[0]
-
-				// The node with the lowest ID becomes the new root
-				if rcv.Cmd == Connect {
-					if node.ID < rcv.Data[0] {
-						childs = append(childs, parentID, neigh.ID)
-
-						fragmentID = node.ID
-						parentID = node.ID
-						root = true
-					}
-				}
-			}
-		} else {
-			// FINISHED
-			myLog(node.Address, "FINISHED")
-			break
 		}
 	} // Back to step 2 (NEW_FRAG)
 
