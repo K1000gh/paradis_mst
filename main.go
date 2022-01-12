@@ -312,15 +312,13 @@ func server(neighboursFilePath string) {
 }
 
 func main() {
-	for ind := 0; ind < 30; ind++ {
-		go server("./nodes/node-1.yaml")
-		go server("./nodes/node-2.yaml")
-		go server("./nodes/node-3.yaml")
-		go server("./nodes/node-4.yaml")
-		go server("./nodes/node-5.yaml")
-		go server("./nodes/node-6.yaml")
-		go server("./nodes/node-7.yaml")
-		go server("./nodes/node-8.yaml")
-		time.Sleep(50 * time.Second)
-	}
+	go server("./nodes/case_3frag/node-1.yaml")
+	go server("./nodes/case_3frag/node-2.yaml")
+	go server("./nodes/case_3frag/node-3.yaml")
+	go server("./nodes/case_3frag/node-4.yaml")
+	go server("./nodes/case_3frag/node-5.yaml")
+	go server("./nodes/case_3frag/node-6.yaml")
+	go server("./nodes/case_3frag/node-7.yaml")
+	go server("./nodes/case_3frag/node-8.yaml")
+	time.Sleep(50 * time.Second)
 }
