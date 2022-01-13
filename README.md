@@ -40,5 +40,8 @@ The algorithm follows the GHS phases:
 *If a new merge occurs, the nodes next to the reported least weighed path CONNECT to each other. The lowest node's ID becomes the new root and send a NEW_FRAGMENT (back to step 2).*
 
 ## Test cases
+### Two fragments
+![Test case 1](./img/test_case_2.png)
 
-![Test case 1](./img/test_case_1.png)
+### Three fragments
+![Test case 2](./img/test_case_3.png)

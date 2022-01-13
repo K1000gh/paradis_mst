@@ -16,7 +16,8 @@ import (
 const PORT = ":30000"
 const LOG = true
 const CMDLOG = true
-const DELAY_MS = 6000
+const DELAY_MS = 2000
+const TIMEOUT_MS = 4000
 
 type Neigh struct {
 	ID         byte   `yaml:"id"`
@@ -64,7 +65,6 @@ func getLowestWeightNeighbour(node yamlConfig) Neigh {
 	sort.Slice(neighbours, func(i, j int) bool {
 		return neighbours[i].EdgeWeight < neighbours[j].EdgeWeight
 	})
-
 	return neighbours[0]
 }
 
@@ -74,7 +74,6 @@ func getNeighbour(node yamlConfig, id byte) Neigh {
 			return neigh
 		}
 	}
-
 	return Neigh{}
 }
 
@@ -157,25 +156,13 @@ func sendToParent(node yamlConfig, parentId byte, cmd Command, data []byte) {
 	}
 }
 
-func pollPacketsReceive(node yamlConfig, srv *Server, n int, cmd Command) []Packet {
+func pollPacketsReceive(node yamlConfig, srv *Server, n int, cmds ...Command) []Packet {
 	var answerPcks []Packet
 	for {
 		time.Sleep(10 * time.Millisecond)
-		answerPcks = append(answerPcks, srv.getAnswerPackets(node, cmd)[:]...)
-
-		if len(answerPcks) >= n {
-			break
+		for _, cmd := range cmds {
+			answerPcks = append(answerPcks, srv.getAnswerPackets(node, cmd)[:]...)
 		}
-	}
-
-	return answerPcks
-}
-
-func pollAllPacketsReceive(node yamlConfig, srv *Server, n int) []Packet {
-	var answerPcks []Packet
-	for {
-		time.Sleep(10 * time.Millisecond)
-		answerPcks = append(answerPcks, srv.getAllAnswerPackets(node)[:]...)
 
 		if len(answerPcks) >= n {
 			break
@@ -247,7 +234,7 @@ func server(neighboursFilePath string) {
 		time.Sleep(DELAY_MS * time.Millisecond)
 
 		var testAccept [][]byte
-		for _, pck := range pollAllPacketsReceive(node, srv, len(node.Neighbours)) {
+		for _, pck := range pollPacketsReceive(node, srv, len(node.Neighbours), Accept, Reject) {
 			if pck.Cmd == Accept {
 				neigh := getNeighbour(node, pck.Src)
 				testAccept = append(testAccept, []byte{neigh.ID, byte(neigh.EdgeWeight)})
@@ -306,15 +293,13 @@ func server(neighboursFilePath string) {
 
 			if neigh != (Neigh{}) && byte(neigh.EdgeWeight) == merge.Data[1] {
 				myLog(node.Address, "I'm the neighbour in charge of the merge")
-				if node.ID != fragmentID {
-					//childs = append(childs, parentID)
-					root = true
-					fragmentID = node.ID
-					parentID = node.ID
-				}
+
+				root = true
+				fragmentID = node.ID
+				parentID = node.ID
 
 				sendCommand(neigh.Address, Connect, []byte{node.ID}, node.ID)
-				time.Sleep(10000 * time.Millisecond) // Timeout
+				time.Sleep(TIMEOUT_MS * time.Millisecond) // Timeout
 				for _, pck := range pollPacketsReceive(node, srv, 0, Connect) {
 					if pck.Src == neigh.ID {
 						// The node with the lowest ID becomes the new root
@@ -324,6 +309,8 @@ func server(neighboursFilePath string) {
 					}
 				}
 			}
+
+			srv.resetbuff()
 		} else {
 			// FINISHED
 			myLog(node.Address, "FINISHED. My childs are ["+strings.Trim(strings.Join(strings.Fields(fmt.Sprint(childs)), ", "), "[]")+"]")
@@ -343,5 +330,5 @@ func main() {
 	go server("./nodes/case_3frag/node-6.yaml")
 	go server("./nodes/case_3frag/node-7.yaml")
 	server("./nodes/case_3frag/node-8.yaml")
-	time.Sleep(10 * time.Second)
+	time.Sleep(6 * time.Second)
 }

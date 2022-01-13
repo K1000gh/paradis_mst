@@ -102,8 +102,9 @@ func (s *Server) getPacket() Packet {
 
 func (s *Server) getCMD(cmd Command) []Packet {
 	packets := s.buff
+	s.resetbuff()
+
 	var ret []Packet
-	s.buff = []Packet{}
 	for _, pck := range packets {
 		if pck.Cmd == cmd {
 			ret = append(ret, pck)
@@ -122,23 +123,9 @@ func (s *Server) getAnswerPackets(node yamlConfig, cmd Command) []Packet {
 			s.buff = append(s.buff, s.getPacket())
 		}
 	}
-
 	return s.getCMD(cmd)
 }
 
 func (s *Server) resetbuff() {
 	s.buff = []Packet{}
-}
-
-func (s *Server) getAllAnswerPackets(node yamlConfig) []Packet {
-	packets := s.buff
-	s.buff = []Packet{}
-
-	for ind := 0; ind < len(node.Neighbours); ind++ {
-		if s.isPacketAvalible() {
-			packets = append(packets, s.getPacket())
-		}
-	}
-
-	return packets
 }
