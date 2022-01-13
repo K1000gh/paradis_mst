@@ -45,3 +45,5 @@ The algorithm follows the GHS phases:
 
 ### Three fragments
 ![Test case 2](./img/test_case_3.png)
+
+Another test case was done with a single fragment, but the figure is not shown for this one. All three nodes configurations used to test the algorythm are in the node directory of the project.
