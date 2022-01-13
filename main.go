@@ -15,8 +15,8 @@ import (
 
 const PORT = ":30000"
 const LOG = true
-const CMDLOG = false
-const DELAY_MS = 2000
+const CMDLOG = true
+const DELAY_MS = 6000
 
 type Neigh struct {
 	ID         byte   `yaml:"id"`
@@ -157,11 +157,25 @@ func sendToParent(node yamlConfig, parentId byte, cmd Command, data []byte) {
 	}
 }
 
-func pollPacketsReceive(node yamlConfig, srv *Server, n int) []Packet {
+func pollPacketsReceive(node yamlConfig, srv *Server, n int, cmd Command) []Packet {
 	var answerPcks []Packet
 	for {
 		time.Sleep(10 * time.Millisecond)
-		answerPcks = append(answerPcks, srv.getAnswerPackets(node)[:]...)
+		answerPcks = append(answerPcks, srv.getAnswerPackets(node, cmd)[:]...)
+
+		if len(answerPcks) >= n {
+			break
+		}
+	}
+
+	return answerPcks
+}
+
+func pollAllPacketsReceive(node yamlConfig, srv *Server, n int) []Packet {
+	var answerPcks []Packet
+	for {
+		time.Sleep(10 * time.Millisecond)
+		answerPcks = append(answerPcks, srv.getAllAnswerPackets(node)[:]...)
 
 		if len(answerPcks) >= n {
 			break
@@ -184,7 +198,7 @@ func server(neighboursFilePath string) {
 	// Wait for the answer from neighbours
 	time.Sleep(DELAY_MS * time.Millisecond)
 	var connected []byte
-	for _, pck := range srv.getAnswerPackets(node) {
+	for _, pck := range srv.getAnswerPackets(node, Connect) {
 		connected = append(connected, pck.Data[0])
 	}
 
@@ -198,7 +212,7 @@ func server(neighboursFilePath string) {
 			myLog(node.Address, "I'm the fragment's root")
 		} else {
 			// Wait to receive NEW_FRAG message from the root node
-			newfrag := pollPacketsReceive(node, srv, 1)[0]
+			newfrag := pollPacketsReceive(node, srv, 1, NewFragment)[0]
 
 			fragmentID = newfrag.Data[0]
 			parentID = newfrag.Src // New fragment is always received from the parent node
@@ -217,7 +231,7 @@ func server(neighboursFilePath string) {
 		sendToNeighbours(node, Test, []byte{fragmentID})
 		time.Sleep(DELAY_MS * time.Millisecond)
 
-		for _, pck := range pollPacketsReceive(node, srv, len(node.Neighbours)) {
+		for _, pck := range pollPacketsReceive(node, srv, len(node.Neighbours), Test) {
 			neigh := getNeighbour(node, pck.Src)
 			cmd := func() Command {
 				if fragmentID == pck.Data[0] {
@@ -233,7 +247,7 @@ func server(neighboursFilePath string) {
 		time.Sleep(DELAY_MS * time.Millisecond)
 
 		var testAccept [][]byte
-		for _, pck := range pollPacketsReceive(node, srv, len(node.Neighbours)) {
+		for _, pck := range pollAllPacketsReceive(node, srv, len(node.Neighbours)) {
 			if pck.Cmd == Accept {
 				neigh := getNeighbour(node, pck.Src)
 				testAccept = append(testAccept, []byte{neigh.ID, byte(neigh.EdgeWeight)})
@@ -244,7 +258,7 @@ func server(neighboursFilePath string) {
 
 		// Nodes without any children starts to report
 		if len(childs) > 0 {
-			for _, pck := range pollPacketsReceive(node, srv, len(childs)) {
+			for _, pck := range pollPacketsReceive(node, srv, len(childs), Report) {
 				if len(pck.Data) > 1 {
 					testAccept = append(testAccept, []byte{pck.Data[0], pck.Data[1]})
 				}
@@ -259,7 +273,7 @@ func server(neighboursFilePath string) {
 			if root {
 				return Packet{Merge, node.ID, func() []byte {
 					if len(testAccept) > 0 {
-						return []byte{testAccept[0][0]}
+						return testAccept[0]
 					}
 
 					return []byte{}
@@ -274,7 +288,7 @@ func server(neighboursFilePath string) {
 				}())
 
 				time.Sleep(DELAY_MS * time.Millisecond)
-				return pollPacketsReceive(node, srv, 1)[0]
+				return pollPacketsReceive(node, srv, 1, Merge)[0]
 			}
 		}()
 
@@ -283,22 +297,31 @@ func server(neighboursFilePath string) {
 
 		if len(merge.Data) > 0 {
 			// MERGE phase, reset root node
+			if root == false {
+				childs = append(childs, parentID)
+			}
+
 			root = false
 			neigh := getNeighbour(node, merge.Data[0])
 
-			if neigh != (Neigh{}) {
+			if neigh != (Neigh{}) && byte(neigh.EdgeWeight) == merge.Data[1] {
 				myLog(node.Address, "I'm the neighbour in charge of the merge")
-
-				sendCommand(neigh.Address, Connect, []byte{node.ID}, node.ID)
-				rcv := pollPacketsReceive(node, srv, 1)[0]
-
-				// The node with the lowest ID becomes the new root
-				if node.ID < rcv.Data[0] {
-					childs = append(childs, parentID, neigh.ID)
-
+				if node.ID != fragmentID {
+					//childs = append(childs, parentID)
+					root = true
 					fragmentID = node.ID
 					parentID = node.ID
-					root = true
+				}
+
+				sendCommand(neigh.Address, Connect, []byte{node.ID}, node.ID)
+				time.Sleep(10000 * time.Millisecond) // Timeout
+				for _, pck := range pollPacketsReceive(node, srv, 0, Connect) {
+					if pck.Src == neigh.ID {
+						// The node with the lowest ID becomes the new root
+						root = node.ID < pck.Data[0]
+						childs = append(childs, neigh.ID)
+						break
+					}
 				}
 			}
 		} else {
@@ -319,6 +342,6 @@ func main() {
 	go server("./nodes/case_3frag/node-5.yaml")
 	go server("./nodes/case_3frag/node-6.yaml")
 	go server("./nodes/case_3frag/node-7.yaml")
-	go server("./nodes/case_3frag/node-8.yaml")
-	time.Sleep(50 * time.Second)
+	server("./nodes/case_3frag/node-8.yaml")
+	time.Sleep(10 * time.Second)
 }

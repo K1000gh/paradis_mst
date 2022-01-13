@@ -17,6 +17,7 @@ type Server struct {
 	wg         sync.WaitGroup
 	packetsCnt int
 	chData     chan []byte
+	buff       []Packet
 }
 
 func NewServer(addr string) *Server {
@@ -99,9 +100,40 @@ func (s *Server) getPacket() Packet {
 	return pck
 }
 
+func (s *Server) getCMD(cmd Command) []Packet {
+	packets := s.buff
+	var ret []Packet
+	s.buff = []Packet{}
+	for _, pck := range packets {
+		if pck.Cmd == cmd {
+			ret = append(ret, pck)
+		} else {
+			s.buff = append(s.buff, pck)
+		}
+	}
+
+	return ret
+}
+
 // Collect all received packets since last time called from all neighbours
-func (s *Server) getAnswerPackets(node yamlConfig) []Packet {
-	var packets []Packet
+func (s *Server) getAnswerPackets(node yamlConfig, cmd Command) []Packet {
+	for ind := 0; ind < len(node.Neighbours); ind++ {
+		if s.isPacketAvalible() {
+			s.buff = append(s.buff, s.getPacket())
+		}
+	}
+
+	return s.getCMD(cmd)
+}
+
+func (s *Server) resetbuff() {
+	s.buff = []Packet{}
+}
+
+func (s *Server) getAllAnswerPackets(node yamlConfig) []Packet {
+	packets := s.buff
+	s.buff = []Packet{}
+
 	for ind := 0; ind < len(node.Neighbours); ind++ {
 		if s.isPacketAvalible() {
 			packets = append(packets, s.getPacket())
